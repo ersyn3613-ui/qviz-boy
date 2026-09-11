@@ -18,13 +18,13 @@ const BROWN = '0x5A3210';
 const GREEN = '0x1E7A1E';
 const BORDER = 'white';
 
+// Значения по умолчанию (используются, если поле не пришло в payload)
 const QUESTION_FONT = 40;
 const HOOK_FONT = 40;
 const ANSWER_FONT = 34;
 
-// === РАСПОЛОЖЕНИЕ ТЕКСТА (по разметке) ===
-const QUESTION_CY = 529;             // центр вопроса: 529,3 пкс от верха
-const ANSWER_CY = [785, 890, 999,5];  // центры ответов: нижний опущен на 20px (991 -> 999,5)
+const QUESTION_CY = 529;
+const ANSWER_CY = [785, 890, 999.5];
 const QUESTION_WRAP = 24;
 const ANSWER_WRAP = 22;
 
@@ -52,8 +52,9 @@ function wrap(text, maxChars) {
   return lines.length ? lines : [''];
 }
 
-function drawtext({ text, fontsize, color, cy, enable }) {
-  const lineH = Math.round(fontsize * 1.28);
+// lineFactor — множитель межстрочного расстояния (было 1.28)
+function drawtext({ text, fontsize, color, cy, enable, lineFactor }) {
+  const lineH = Math.round(fontsize * (lineFactor || 1.28));
   const lines = Array.isArray(text) ? text : [text];
   const n = lines.length;
   const startY = Math.round(cy - (n * lineH) / 2 + lineH / 2);
@@ -83,6 +84,7 @@ app.post(
     { name: 'item', maxCount: 1 },
     { name: 'transport', maxCount: 1 },
     { name: 'niz-pravo', maxCount: 1 },
+    { name: 'audio', maxCount: 1 },   // ← НОВОЕ: принимаем аудио-слой
   ]),
   (req, res) => {
     let payload = {};
@@ -94,6 +96,7 @@ app.post(
     for (const k of need) {
       if (!f[k] || !f[k][0]) return res.status(400).json({ error: 'MISSING_FILE', field: k });
     }
+    const hasAudioFile = !!(f.audio && f.audio[0]);
 
     const t = payload.timings || {};
     const duration = Number(payload.duration) || Number(t.duration) || 13;
@@ -107,6 +110,20 @@ app.post(
     const hook = payload.hook || '';
     const answers = Array.isArray(payload.answers) ? payload.answers : [];
     const correctIndex = (Number(payload.correct_answer_position) || 1) - 1;
+
+    // === НОВОЕ: читаем стиль и габариты из payload (с фолбэком на старые значения) ===
+    const style = payload.style || {};
+    const box = payload.box || {};
+    const qFont = Number(style.fontSize) || QUESTION_FONT;
+    const lineFactor = Number(style.lineSpacing) || 1.28;
+    // вертикальный центр вопроса = центр рамки, если box передан
+    const qCy = (box.y != null && box.height != null)
+      ? Math.round(Number(box.y) + Number(box.height) / 2)
+      : QUESTION_CY;
+    // перенос строк подбираем под ширину рамки и размер шрифта
+    const qWrap = (box.width != null)
+      ? Math.max(8, Math.floor(Number(box.width) / (qFont * 0.55)))
+      : QUESTION_WRAP;
 
     const outPath = path.join(os.tmpdir(), 'out_' + Date.now() + '.mp4');
 
@@ -123,16 +140,16 @@ app.post(
 
     if (hook) {
       draws.push(...drawtext({
-        text: wrap(hook, QUESTION_WRAP),
-        fontsize: HOOK_FONT, color: BROWN, cy: QUESTION_CY,
+        text: wrap(hook, qWrap),
+        fontsize: qFont, color: BROWN, cy: qCy, lineFactor,
         enable: 'between(t,' + hookStart + ',' + questionStart + ')',
       }));
     }
 
     if (question) {
       draws.push(...drawtext({
-        text: wrap(question, QUESTION_WRAP),
-        fontsize: QUESTION_FONT, color: BROWN, cy: QUESTION_CY,
+        text: wrap(question, qWrap),
+        fontsize: qFont, color: BROWN, cy: qCy, lineFactor,
         enable: 'gte(t,' + questionStart + ')',
       }));
     }
@@ -146,16 +163,16 @@ app.post(
 
       if (i === correctIndex) {
         draws.push(...drawtext({
-          text: wrapped, fontsize: ANSWER_FONT, color: BROWN, cy,
+          text: wrapped, fontsize: ANSWER_FONT, color: BROWN, cy, lineFactor,
           enable: 'between(t,' + appear + ',' + revealStart + ')',
         }));
         draws.push(...drawtext({
-          text: wrapped, fontsize: ANSWER_FONT, color: GREEN, cy,
+          text: wrapped, fontsize: ANSWER_FONT, color: GREEN, cy, lineFactor,
           enable: 'gte(t,' + revealStart + ')',
         }));
       } else {
         draws.push(...drawtext({
-          text: wrapped, fontsize: ANSWER_FONT, color: BROWN, cy,
+          text: wrapped, fontsize: ANSWER_FONT, color: BROWN, cy, lineFactor,
           enable: 'between(t,' + appear + ',' + revealStart + ')',
         }));
       }
@@ -177,20 +194,31 @@ app.post(
 
     const filterComplex = segs.join(';');
 
+    // Видео-входы: fon(0) + 6 картинок(1..6). Аудио, если есть — вход 7.
     const args = [
       '-y',
-      // fon теперь ВИДЕО (.mp4) — используем -stream_loop, а НЕ -loop
       '-stream_loop', '-1', '-i', f.fon[0].path,
-      // остальные 6 слоёв — картинки (PNG), им нужен -loop 1
       '-loop', '1', '-i', f.topleft[0].path,
       '-loop', '1', '-i', f.inscription[0].path,
       '-loop', '1', '-i', f.animal[0].path,
       '-loop', '1', '-i', f.item[0].path,
       '-loop', '1', '-i', f.transport[0].path,
       '-loop', '1', '-i', f['niz-pravo'][0].path,
+    ];
+    if (hasAudioFile) {
+      args.push('-i', f.audio[0].path);   // вход 7 = музыка
+    }
+    args.push(
       '-filter_complex', filterComplex,
       '-map', '[vout]',
-      '-map', '0:a?',            // ← звук из фонового видео (fon), необязательный
+    );
+    // === НОВОЕ: звук ===
+    if (hasAudioFile) {
+      args.push('-map', '7:a:0');   // музыка из отдельного файла
+    } else {
+      args.push('-map', '0:a?');    // фолбэк: звук из фонового видео (если есть)
+    }
+    args.push(
       '-t', String(duration),
       '-r', String(FPS),
       '-pix_fmt', 'yuv420p',
@@ -198,12 +226,12 @@ app.post(
       '-preset', 'ultrafast',
       '-threads', '2',
       '-filter_complex_threads', '1',
-      '-c:a', 'aac',             // ← аудиокодек
+      '-c:a', 'aac',
       '-b:a', '192k',
-      '-shortest',               // ← обрезать по видео (зацикленный фон не тянет длину)
+      '-shortest',
       '-movflags', '+faststart',
       outPath,
-    ];
+    );
 
     const ff = spawn('ffmpeg', args);
     let stderr = '';
