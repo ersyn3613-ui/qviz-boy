@@ -14,14 +14,14 @@ const W = 900;
 const H = 1600;
 const FPS = 30;
 
-const BROWN = '0x5A3210';
+const BROWN = '0x2E2320';   // темнее (было 0x5A3210)
 const GREEN = '0x1E7A1E';
 const BORDER = 'white';
 
 // Значения по умолчанию (используются, если поле не пришло в payload)
-const QUESTION_FONT = 40;
-const HOOK_FONT = 40;
-const ANSWER_FONT = 34;
+const QUESTION_FONT = 34;   // меньше (было 40)
+const HOOK_FONT = 34;       // меньше (было 40)
+const ANSWER_FONT = 30;     // меньше (было 34)
 
 const QUESTION_CY = 529;
 const ANSWER_CY = [785, 890, 999.5];
@@ -99,9 +99,9 @@ app.post(
     const hasAudioFile = !!(f.audio && f.audio[0]);
 
     const t = payload.timings || {};
-    const duration = Number(payload.duration) || Number(t.duration) || 13;
+    const duration = Number(payload.duration) || Number(t.duration) || 10;   // было 13
     const hookStart = Number(t.hook_start != null ? t.hook_start : 0);
-    const questionStart = Number(t.question_start != null ? t.question_start : 3);
+    const questionStart = Number(t.question_start != null ? t.question_start : 1);   // было 3
     const answerStart = Number(t.answer_start != null ? t.answer_start : 4);
     const answerStep = Number(t.answer_step != null ? t.answer_step : 0.3);
     const revealStart = Number(t.reveal_start != null ? t.reveal_start : 9);
@@ -111,11 +111,15 @@ app.post(
     const answers = Array.isArray(payload.answers) ? payload.answers : [];
     const correctIndex = (Number(payload.correct_answer_position) || 1) - 1;
 
-    // === НОВОЕ: читаем стиль и габариты из payload (с фолбэком на старые значения) ===
+    // === читаем стиль и габариты из payload (с фолбэком на старые значения) ===
     const style = payload.style || {};
     const box = payload.box || {};
     const qFont = Number(style.fontSize) || QUESTION_FONT;
     const lineFactor = Number(style.lineSpacing) || 1.28;
+    // Цвет текста из payload (#RRGGBB → 0xRRGGBB), фолбэк на BROWN
+    const qColor = style.textColor
+      ? '0x' + String(style.textColor).replace(/^#/, '')
+      : BROWN;
     // вертикальный центр вопроса = центр рамки, если box передан
     const qCy = (box.y != null && box.height != null)
       ? Math.round(Number(box.y) + Number(box.height) / 2)
@@ -141,7 +145,7 @@ app.post(
     if (hook) {
       draws.push(...drawtext({
         text: wrap(hook, qWrap),
-        fontsize: qFont, color: BROWN, cy: qCy, lineFactor,
+        fontsize: qFont, color: qColor, cy: qCy, lineFactor,
         enable: 'between(t,' + hookStart + ',' + questionStart + ')',
       }));
     }
@@ -149,7 +153,7 @@ app.post(
     if (question) {
       draws.push(...drawtext({
         text: wrap(question, qWrap),
-        fontsize: qFont, color: BROWN, cy: qCy, lineFactor,
+        fontsize: qFont, color: qColor, cy: qCy, lineFactor,
         enable: 'gte(t,' + questionStart + ')',
       }));
     }
@@ -163,7 +167,7 @@ app.post(
 
       if (i === correctIndex) {
         draws.push(...drawtext({
-          text: wrapped, fontsize: ANSWER_FONT, color: BROWN, cy, lineFactor,
+          text: wrapped, fontsize: ANSWER_FONT, color: qColor, cy, lineFactor,
           enable: 'between(t,' + appear + ',' + revealStart + ')',
         }));
         draws.push(...drawtext({
@@ -172,7 +176,7 @@ app.post(
         }));
       } else {
         draws.push(...drawtext({
-          text: wrapped, fontsize: ANSWER_FONT, color: BROWN, cy, lineFactor,
+          text: wrapped, fontsize: ANSWER_FONT, color: qColor, cy, lineFactor,
           enable: 'between(t,' + appear + ',' + revealStart + ')',
         }));
       }
@@ -212,7 +216,7 @@ app.post(
       '-filter_complex', filterComplex,
       '-map', '[vout]',
     );
-    // === НОВОЕ: звук ===
+    // === звук ===
     if (hasAudioFile) {
       args.push('-map', '7:a:0');   // музыка из отдельного файла
     } else {
